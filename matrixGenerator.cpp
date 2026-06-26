@@ -2,104 +2,115 @@
 #include <fstream>
 #include <vector>
 #include <random>
-#include <unordered_map>
-#include <set>
+#include <filesystem>
+#include <cmath>
+#include <algorithm>
 
-int main()
+namespace fs = std::filesystem;
+
+int main(int argc, char* argv[])
 {
-    int n = 1000;
-    double density = 0.005; // 0.5%
+    if (argc < 3)
+    {
+        std::cout << "Usage:\n";
+        std::cout << argv[0] << " matrix_size bandwidth\n";
+        return 0;
+    }
 
-    std::mt19937 gen(123);
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    const int n = std::stoi(argv[1]);
+    const int bandwidth = std::stoi(argv[2]);
 
-    // --- temporary dense matrix for SPD construction ---
-    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
+    std::mt19937 rng(12345);
+    std::uniform_real_distribution<double> valueDist(-1.0, 1.0);
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
 
-    // -------------------------
-    // STEP 1: build random B
-    // -------------------------
+    fs::create_directories("generated");
+
+    std::vector<std::vector<std::pair<int,double>>> L(n);
+
     for (int i = 0; i < n; i++)
     {
-        for (int j = 0; j < n; j++)
+        int begin = std::max(0, i - bandwidth / 2);
+
+        for (int j = begin; j <= i; j++)
         {
-            if (dist(gen) < density)
+            if (i == j)
             {
-                double v = dist(gen);
-                A[i][j] += v;
+                // diagonal strictly positive -> SPD guarantee
+                L[i].push_back({j, 1.0 + std::abs(valueDist(rng))});
+            }
+            else if (prob(rng) < 0.3)
+            {
+                L[i].push_back({j, valueDist(rng)});
             }
         }
     }
 
-    // -------------------------
-    // STEP 2: A = B^T * B
-    // -------------------------
-    std::vector<std::vector<double>> SPD(n, std::vector<double>(n, 0.0));
-
-    for (int i = 0; i < n; i++)
-        for (int k = 0; k < n; k++)
-            if (A[i][k] != 0)
-                for (int j = 0; j < n; j++)
-                    SPD[i][j] += A[k][i] * A[k][j];
-
-    // -------------------------
-    // STEP 3: add alpha*I (stabilization)
-    // -------------------------
-    double alpha = 1e-3;
-    for (int i = 0; i < n; i++)
-        SPD[i][i] += alpha;
-
-    // -------------------------
-    // STEP 4: convert to CSR (upper triangle only)
-    // -------------------------
-    std::vector<double> values;
-    std::vector<int> columns;
-    std::vector<int> rowPtr(n + 1, 1);
-
-    int nnz = 0;
+    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
 
     for (int i = 0; i < n; i++)
     {
-        rowPtr[i] = nnz + 1;
-
-        for (int j = 0; j < n; j++)
+        for (auto [k1, val1] : L[i])
         {
-            if (SPD[i][j] != 0.0)
+            for (int j = 0; j <= i; j++)
             {
-                values.push_back(SPD[i][j]);
-                columns.push_back(j + 1); // PARDISO = 1-based
+                for (auto [k2, val2] : L[j])
+                {
+                    if (k1 == k2)
+                    {
+                        A[i][j] += val1 * val2;
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<double> values;
+    std::vector<int> columns;
+    std::vector<int> rowPtr(n + 1);
+
+    int nnz = 0;
+    rowPtr[0] = 1;
+
+    const double EPS = 1e-12;
+
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j <= i; j++)
+        {
+            if (std::abs(A[i][j]) > EPS)
+            {
+                values.push_back(A[i][j]);
+                columns.push_back(j + 1); // 1-based for PARDISO
                 nnz++;
             }
         }
+
+        rowPtr[i + 1] = nnz + 1;
     }
 
-    rowPtr[n] = nnz + 1;
-
-    // -------------------------
-    // RHS
-    // -------------------------
     std::vector<double> rhs(n, 1.0);
 
-    // -------------------------
-    // SAVE
-    // -------------------------
-    std::ofstream out("matrix_small.txt");
+    std::string prefix = "generated/matrix_" + std::to_string(n);
 
-    out << n << " " << nnz << "\n\n";
+    std::ofstream info(prefix + "_info.txt");
+    info << n << "\n" << nnz << "\n";
 
-    out << "values\n";
-    for (auto v : values) out << v << "\n";
+    std::ofstream val(prefix + "_values.txt");
+    for (auto v : values) val << v << "\n";
 
-    out << "columns\n";
-    for (auto c : columns) out << c << "\n";
+    std::ofstream col(prefix + "_columns.txt");
+    for (auto c : columns) col << c << "\n";
 
-    out << "rowPointers\n";
-    for (auto r : rowPtr) out << r << "\n";
+    std::ofstream row(prefix + "_rowptr.txt");
+    for (auto r : rowPtr) row << r << "\n";
 
-    out << "rhs\n";
-    for (auto r : rhs) out << r << "\n";
+    std::ofstream rhsFile(prefix + "_rhs.txt");
+    for (auto b : rhs) rhsFile << b << "\n";
 
-    std::cout << "SPD matrix generated. nnz = " << nnz << "\n";
+    std::cout << "SPD matrix generated WITHOUT dense storage\n";
+    std::cout << "Size : " << n << "\n";
+    std::cout << "NNZ  : " << nnz << "\n";
 
     return 0;
 }

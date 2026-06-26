@@ -18,22 +18,39 @@ void printStats(MKL_INT *iparm)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
-    {
-        std::cout << "Usage: ./solver matrix_file.txt\n";
-        return 0;
-    }
 
     std::string filename = argv[1];
     CSRMatrix A =  MatrixLoader::load(filename);
 
-    std::cout << "min col = "
-          << *std::min_element(A.columns.begin(), A.columns.end())
-          << "\n";
+    std::cout << "n = " << A.n << std::endl;
+    std::cout << "nnz = " << A.nnz << std::endl;
+    std::cout << "rowPointers[n] = " << A.rowPointers[A.n] << std::endl;
 
-    std::cout << "max col = "
-              << *std::max_element(A.columns.begin(), A.columns.end())
-              << "\n";
+    int emptyRows = 0;
+    int missingDiagonal = 0;
+
+    for (int i = 0; i < A.n; i++)
+    {
+        if (A.rowPointers[i] == A.rowPointers[i + 1])
+            emptyRows++;
+
+        bool diag = false;
+        for (int k = A.rowPointers[i] - 1; k < A.rowPointers[i + 1] - 1; k++)
+        {
+            if (A.columns[k] == i + 1)
+            {
+                diag = true;
+                break;
+            }
+        }
+
+        if (!diag)
+            missingDiagonal++;
+    }
+
+    std::cout << "Empty rows      = " << emptyRows << '\n';
+    std::cout << "Missing diagonal= " << missingDiagonal << '\n';
+
 
     int n = A.n;
     int nrhs = 1;
@@ -41,36 +58,23 @@ int main(int argc, char **argv)
     std::cout << A.rowPointers[0] << " ... " << A.rowPointers[A.n] << "\n";
     std::vector<double> x(n, 0.0);
 
-    void *pt[64] = {0};
+    void *pt[64] = { nullptr };
     MKL_INT iparm[64];
 
-    for (int i = 0; i < 64; i++)
-        iparm[i] = 0;
+    for (int & i : iparm)
+        i = 0;
 
-    // --------------------------
-    // KONFIGURACJA PARDISO
-    // --------------------------
-    iparm[0] = 0;   // no solver default
-    iparm[1] = 2;   // METIS ordering
-    iparm[7] = 2;   // iterative refinement steps
-    iparm[9] = 13;  // pivot perturbation
-    iparm[10] = 1;  // scaling
-    iparm[17] = -1; // output nnz in LU
-    iparm[18] = -1; // memory estimate
-    iparm[26] = 1;
-    iparm[27] = 1;
+    iparm[0] = 1;
+    iparm[1] = 2;
 
     MKL_INT maxfct = 1;
     MKL_INT mnum = 1;
     MKL_INT mtype = 2; // SPD real matrix
-    MKL_INT msglvl = 1;
+    MKL_INT msglvl = 2;
     MKL_INT error = 0;
 
     MKL_INT phase;
 
-    // ==========================
-    // 1. ANALIZA SYMBOLICZNA
-    // ==========================
     phase = 11;
 
     auto t1 = std::chrono::high_resolution_clock::now();
@@ -80,12 +84,12 @@ int main(int argc, char **argv)
             A.values.data(),
             A.rowPointers.data(),
             A.columns.data(),
-            NULL,
+            nullptr,
             &nrhs,
             iparm,
             &msglvl,
-            A.rhs.data(),
-            x.data(),
+            nullptr,
+            nullptr,
             &error);
 
     auto t2 = std::chrono::high_resolution_clock::now();
@@ -96,9 +100,6 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // ==========================
-    // 2. FAKTORYZACJA
-    // ==========================
     phase = 22;
 
     auto t3 = std::chrono::high_resolution_clock::now();
@@ -124,9 +125,6 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // ==========================
-    // 3. ROZWIĄZANIE UKŁADU
-    // ==========================
     phase = 33;
 
     auto t5 = std::chrono::high_resolution_clock::now();
@@ -152,9 +150,6 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // ==========================
-    // 4. ZWOLNIENIE PAMIĘCI
-    // ==========================
     phase = -1;
 
     pardiso(pt, &maxfct, &mnum, &mtype, &phase,
@@ -172,9 +167,6 @@ int main(int argc, char **argv)
 
     auto t7 = std::chrono::high_resolution_clock::now();
 
-    // ==========================
-    // WYNIKI
-    // ==========================
     std::cout << "\nFILE: " << filename << "\n";
     std::cout << "N: " << n << "  NNZ: " << A.nnz << "\n";
 
@@ -196,7 +188,6 @@ int main(int argc, char **argv)
 
     printStats(iparm);
 
-    // opcjonalna kontrola wyniku
     std::cout << "\nSample x[0] = " << x[0] << "\n";
 
     return 0;
